@@ -142,7 +142,11 @@ impl DeckPanel {
             let found = background.spawn(async move { cards::store().lookup(&ids) }).await;
             let images: Vec<(i64, String)> =
                 found.values().filter(|c| !c.image.is_empty()).map(|c| (c.id, c.image.clone())).collect();
-            let ids = missing.clone();
+            // Scryfall is asked by id, and by name for the cards it does not know by id.
+            let wanted: Vec<(i64, String)> = missing
+                .iter()
+                .map(|id| (*id, found.get(id).map(|card| card.name.clone()).unwrap_or_default()))
+                .collect();
             let named = this.update(cx, |this, cx| {
                 this.cards.extend(found);
                 this.asked.extend(missing);
@@ -155,7 +159,7 @@ impl DeckPanel {
                 return;
             }
             // Then costs and colours, which also put the rows in their final order.
-            let costs = background.spawn(async move { cards::store().costs(&ids) }).await;
+            let costs = background.spawn(async move { cards::store().costs(&wanted) }).await;
             let costed = this.update(cx, |this, cx| {
                 this.costs.extend(costs);
                 cx.notify();

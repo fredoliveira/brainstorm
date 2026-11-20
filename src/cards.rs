@@ -9,10 +9,11 @@
 //!   that are not from the set being drafted (any deck card). Kept for good: an Arena card id
 //!   never changes meaning.
 //! - **Costs**: 17Lands' card lookup has no mana costs or colours, so those come from
-//!   Scryfall, one card at a time, also kept for good.
+//!   Scryfall, one card at a time, also kept for good. Scryfall learns a new set's Arena ids
+//!   late, so a card it does not know by id is asked for by name.
 //! - **Images**: downloaded once as WebP and turned into the two files the panels show.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -158,8 +159,15 @@ pub struct Store {
     agent: ureq::Agent,
     ratings: Mutex<HashMap<String, (Arc<Ratings>, SystemTime)>>,
     cards: Mutex<Option<HashMap<i64, Card>>>,
-    /// `None` for a card Scryfall does not know, so it is asked only once.
-    costs: Mutex<Option<HashMap<i64, Option<Cost>>>>,
+    costs: Mutex<Option<Costs>>,
+}
+
+/// What Scryfall has said so far.
+struct Costs {
+    /// Kept on disk for good.
+    known: HashMap<i64, Cost>,
+    /// Cards it did not know, by id or by name, so each is asked about once a run.
+    missed: HashSet<i64>,
 }
 
 /// The one store, on the cache directory.
@@ -291,40 +299,70 @@ impl Store {
         ids.iter().filter_map(|id| Some((*id, known.get(id)?.clone()))).collect()
     }
 
-    /// Mana costs and colours for these cards, from Scryfall. Slow the first time a card is
-    /// asked for (one request each, a tenth of a second apart), instant after.
-    pub fn costs(&self, ids: &[i64]) -> HashMap<i64, Cost> {
+    /// Mana costs and colours for these cards (Arena id and name), from Scryfall. Slow the
+    /// first time a card is asked for (a request or two each, a tenth of a second apart),
+    /// instant after.
+    ///
+    /// Scryfall is asked by Arena id first, and by name when it does not know the id: it has
+    /// a new set's cards weeks before it has their Arena ids, which is exactly when that set
+    /// is being drafted.
+    pub fn costs(&self, cards: &[(i64, String)]) -> HashMap<i64, Cost> {
         let file = self.dir.join("scryfall.json");
         let mut guard = self.costs.lock().unwrap();
-        let known = guard.get_or_insert_with(|| {
-            std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-        });
-        let mut asked = false;
-        for id in ids {
-            if known.contains_key(id) {
-                continue;
+        let costs = guard.get_or_insert_with(|| {
+            // Older files also recorded the cards Scryfall did not know, as nulls.
+            let saved: HashMap<i64, Option<Cost>> =
+                std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            Costs {
+                known: saved.into_iter().filter_map(|(id, cost)| Some((id, cost?))).collect(),
+                missed: HashSet::new(),
             }
-            if asked {
+        });
+
+        let mut requests = 0;
+        let mut ask = |url: &str, query: &[(&str, &str)]| -> Result<Option<Cost>, ()> {
+            if requests > 0 {
                 std::thread::sleep(SCRYFALL_PAUSE);
             }
-            asked = true;
-            let request = self.agent.get(&format!("https://api.scryfall.com/cards/arena/{id}"));
-            match request.set("Accept", "application/json").call() {
-                Ok(response) => {
-                    let cost = response.into_string().ok().and_then(|text| decode_cost(&text));
-                    known.insert(*id, cost);
+            requests += 1;
+            let mut request = self.agent.get(url).set("Accept", "application/json");
+            for (key, value) in query {
+                request = request.query(key, value);
+            }
+            match request.call() {
+                Ok(response) => Ok(response.into_string().ok().and_then(|text| decode_cost(&text))),
+                Err(ureq::Error::Status(404, _)) => Ok(None),
+                // Offline, rate-limited, anything else: no answer, ask again another time.
+                Err(_) => Err(()),
+            }
+        };
+        let mut found = false;
+        for (id, name) in cards {
+            if costs.known.contains_key(id) || costs.missed.contains(id) {
+                continue;
+            }
+            let by_id = ask(&format!("https://api.scryfall.com/cards/arena/{id}"), &[]);
+            let answer = match by_id {
+                Ok(None) if !name.is_empty() => ask("https://api.scryfall.com/cards/named", &[("exact", name)]),
+                other => other,
+            };
+            match answer {
+                Ok(Some(cost)) => {
+                    costs.known.insert(*id, cost);
+                    found = true;
                 }
-                // Scryfall has no such card: remember that. Anything else, ask again later.
-                Err(ureq::Error::Status(404, _)) => {
-                    known.insert(*id, None);
+                // Not known under either: not asked again this run, but not written down
+                // either, since Scryfall may well know it next week.
+                Ok(None) => {
+                    costs.missed.insert(*id);
                 }
-                Err(_) => break,
+                Err(()) => break,
             }
         }
-        if asked && let Ok(bytes) = serde_json::to_vec(&known) {
+        if found && let Ok(bytes) = serde_json::to_vec(&costs.known) {
             write(&file, &bytes);
         }
-        ids.iter().filter_map(|id| Some((*id, known.get(id)?.clone()?))).collect()
+        cards.iter().filter_map(|(id, _)| Some((*id, costs.known.get(id)?.clone()))).collect()
     }
 
     // ── Images ───────────────────────────────────────────────────────────────
