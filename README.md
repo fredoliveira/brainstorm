@@ -16,6 +16,8 @@ Ponder: draw three, then put two back.
 
 ## Install
 
+Brainstorm runs on Apple Silicon Macs, on macOS 11 or later. There is no Intel build.
+
 There is no release yet. Until the first one, build the app from source (see [Develop](#develop)):
 
 ```sh
@@ -121,7 +123,7 @@ just demo         # a made-up pack beside Arena's window, whether or not Arena i
 just demo game    # ...or a made-up game, for the deck overlay
 just lint         # format check, clippy, tests
 just bundle       # dist/Brainstorm.app for this Mac
-just dmg          # universal app + dist/Brainstorm.dmg
+just dmg          # ...and dist/Brainstorm.dmg
 ```
 
 **A development build never uploads to the live 17Lands API.** With a token saved it uploads only
@@ -184,8 +186,8 @@ Two things worth knowing before changing the overlays:
 Bump the version in [`Cargo.toml`](Cargo.toml) (and let `cargo build` update `Cargo.lock`), move the
 changelog's Unreleased entries under the new version, commit, and push a matching tag (`v0.1.0`).
 [`.github/workflows/release.yml`](.github/workflows/release.yml) tests the tagged commit, builds the
-universal app, signs and notarizes it and the `.dmg`, publishes a GitHub release, and bumps the
-Homebrew cask. It needs seven repository secrets, listed in
+app, signs and notarizes it and the `.dmg`, publishes a GitHub release, and bumps the Homebrew cask.
+It needs seven repository secrets, listed in
 [`packaging/homebrew/README.md`](packaging/homebrew/README.md).
 
 `scripts/bundle.sh` signs with the first "Developer ID Application" certificate in your keychain, or

@@ -9,8 +9,9 @@ brew install --cask fredoliveira/tap/brainstorm
 ```
 
 `Casks/brainstorm.rb` in the tap is **generated** by [`generate.sh`](generate.sh) here - edit the
-generator, never the tap file directly. It points at the signed, notarized universal
-`Brainstorm.dmg` that the Release workflow attaches to each GitHub release.
+generator, never the tap file directly. It points at the signed, notarized `Brainstorm.dmg` that the
+Release workflow attaches to each GitHub release. The app is built for Apple Silicon only, and the
+cask says so.
 
 ## Secrets
 

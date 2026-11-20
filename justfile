@@ -23,9 +23,9 @@ demo WHAT="draft":
 bundle *ARGS:
     scripts/bundle.sh {{ARGS}}
 
-# Build the universal app and dist/Brainstorm.dmg, signed but not notarized.
+# Build the app and dist/Brainstorm.dmg, signed but not notarized.
 dmg:
-    scripts/bundle.sh --universal --dmg
+    scripts/bundle.sh --dmg
 
 # Reflow all Markdown to 100 columns (Prettier via npx; config in .prettierrc).
 fmt-md:

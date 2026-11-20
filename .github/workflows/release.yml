@@ -1,5 +1,5 @@
-# Builds, signs and notarizes the universal Brainstorm.dmg for a `v*` tag and publishes it as a
-# GitHub release. Run it by hand (workflow_dispatch) to get the .dmg as a build artifact only.
+# Builds, signs and notarizes Brainstorm.dmg (Apple Silicon only) for a `v*` tag and publishes it
+# as a GitHub release. Run it by hand (workflow_dispatch) to get the .dmg as a build artifact only.
 #
 # Signing + notarization need six repo secrets, the same ones Recall's and Ponder's releases
 # use:
@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   release:
-    name: Brainstorm.dmg (macos universal)
+    name: Brainstorm.dmg (macos arm64)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -41,12 +41,11 @@ jobs:
           fi
 
       # The toolchain is pinned in rust-toolchain.toml; the bundle script builds with exactly
-      # that one, for both architectures.
+      # that one, for Apple Silicon.
       - name: Install Rust toolchain
         run: |
           channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          rustup toolchain install "$channel" --profile minimal \
-            --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup toolchain install "$channel" --profile minimal --target aarch64-apple-darwin
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -105,17 +104,16 @@ jobs:
           security list-keychains -d user -s "$keychain" login.keychain-db
           rm -f "$RUNNER_TEMP/certificate.p12"
 
-      # Builds both architectures into one binary, assembles Brainstorm.app and signs it
-      # (hardened runtime). Without the secrets the script finds no certificate and signs ad
-      # hoc.
-      - name: Build the universal app
+      # Builds the binary, assembles Brainstorm.app and signs it (hardened runtime). Without
+      # the secrets the script finds no certificate and signs ad hoc.
+      - name: Build the app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
             export BRAINSTORM_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY"
           fi
-          scripts/bundle.sh --universal
+          scripts/bundle.sh
 
       # The app is notarized and stapled before it goes into the disk image, so the copy a
       # user drags to Applications carries its own ticket and opens offline.
@@ -184,7 +182,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: brainstorm-universal
+          name: brainstorm-dmg
           path: dist/Brainstorm.dmg
 
       - name: Publish the release
@@ -206,7 +204,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: brainstorm-universal
+          name: brainstorm-dmg
           path: dist
 
       - name: Regenerate cask and push to the tap

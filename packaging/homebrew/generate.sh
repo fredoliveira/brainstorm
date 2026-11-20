@@ -35,6 +35,7 @@ cask "brainstorm" do
   desc "MTG Arena companion: draft ratings, library tracker, 17Lands uploads"
   homepage "https://github.com/fredoliveira/brainstorm"
 
+  depends_on arch: :arm64
   depends_on :macos
 
   app "Brainstorm.app"
