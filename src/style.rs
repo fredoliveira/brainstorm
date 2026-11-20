@@ -31,9 +31,10 @@ impl Layout {
     pub fn draft_row(&self) -> f32 {
         self.scaled(44.)
     }
-    /// A row of the deck panel: count, name and cost.
+    /// A row of the deck panel: art, name, cost and type, copies left. Shorter than a draft
+    /// row, since a deck has more cards than a pack.
     pub fn deck_row(&self) -> f32 {
-        self.scaled(24.)
+        self.scaled(36.)
     }
     /// A panel's height with `rows` rows of height `row`.
     pub fn height(&self, rows: usize, row: f32) -> f32 {

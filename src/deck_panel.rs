@@ -1,5 +1,9 @@
 //! The deck panel: what is left in your library while you play, card by card, with the
 //! chance that the next card off the top is each one.
+//!
+//! A row is built like the draft panel's: rarity on the left edge, a piece of the art, the
+//! name over the card's colours and type. Where the draft panel has a win rate, this one has
+//! the copies still unseen.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -19,7 +23,11 @@ struct Row {
     name: SharedString,
     left: usize,
     total: usize,
-    cost: Vec<Pip>,
+    /// The mana cost, which shows a spell's colours too. A land has no cost: its colours.
+    pips: Vec<Pip>,
+    type_line: SharedString,
+    rarity: String,
+    thumb: Option<PathBuf>,
 }
 
 pub struct DeckPanel {
@@ -76,7 +84,10 @@ impl DeckPanel {
                     name: info.map_or_else(|| format!("Card {}", card.card_id), |c| c.name.clone()).into(),
                     left: card.left,
                     total: card.total,
-                    cost: cost.map(|c| cards::pips(&c.mana_cost)).unwrap_or_default(),
+                    pips: cost.map(pips_for).unwrap_or_default(),
+                    type_line: info.map(|c| c.type_line().to_string()).unwrap_or_default().into(),
+                    rarity: info.map(|c| c.rarity.clone()).unwrap_or_default(),
+                    thumb: self.art.get(&card.card_id).map(|art| art.thumb.clone()),
                 };
                 // A card with no known cost sorts after those with one.
                 (info.is_some_and(Card::is_land) as u8, cost.map_or(f64::MAX, |c| c.cmc), row)
@@ -129,26 +140,37 @@ impl DeckPanel {
             // Names first: they are one request, and the panel reads fine without the rest.
             let ids = missing.clone();
             let found = background.spawn(async move { cards::store().lookup(&ids) }).await;
-            let spells: Vec<i64> =
-                missing.iter().copied().filter(|id| !found.get(id).is_some_and(Card::is_land)).collect();
             let images: Vec<(i64, String)> =
                 found.values().filter(|c| !c.image.is_empty()).map(|c| (c.id, c.image.clone())).collect();
+            let ids = missing.clone();
             let named = this.update(cx, |this, cx| {
                 this.cards.extend(found);
                 this.asked.extend(missing);
                 this.loading.clear();
                 cx.notify();
+                // Two printings of a card become one row once both have a name.
+                cx.defer(overlay::sync);
             });
             if named.is_err() {
                 return;
             }
-            let costs = background.spawn(async move { cards::store().costs(&spells) }).await;
-            if this.update(cx, |this, cx| (this.costs.extend(costs), cx.notify())).is_err() {
+            // Then costs and colours, which also put the rows in their final order.
+            let costs = background.spawn(async move { cards::store().costs(&ids) }).await;
+            let costed = this.update(cx, |this, cx| {
+                this.costs.extend(costs);
+                cx.notify();
+            });
+            if costed.is_err() {
                 return;
             }
+            // Art arrives card by card; the first time a card is seen it is a download.
             for (id, url) in images {
                 let Some(art) = background.spawn(async move { cards::store().art(&url) }).await else { continue };
-                if this.update(cx, |this, _| this.art.insert(id, art)).is_err() {
+                let placed = this.update(cx, |this, cx| {
+                    this.art.insert(id, art);
+                    cx.notify();
+                });
+                if placed.is_err() {
                     return;
                 }
             }
@@ -165,6 +187,13 @@ impl DeckPanel {
     }
 }
 
+/// What a row shows for a card's colours: its mana cost, or for a card without one (a land)
+/// a dot for each colour.
+fn pips_for(cost: &Cost) -> Vec<Pip> {
+    let pips = cards::pips(&cost.mana_cost);
+    if pips.is_empty() { cost.colors.chars().map(Pip::Color).collect() } else { pips }
+}
+
 /// Fold neighbouring rows with the same name into one: two printings of a card are two
 /// Arena ids, and one card to whoever is counting what is left.
 fn merge(rows: impl Iterator<Item = Row>) -> Vec<Row> {
@@ -174,11 +203,21 @@ fn merge(rows: impl Iterator<Item = Row>) -> Vec<Row> {
             Some(last) if last.name == row.name => {
                 last.left += row.left;
                 last.total += row.total;
+                last.thumb = last.thumb.take().or(row.thumb);
             }
             _ => merged.push(row),
         }
     }
     merged
+}
+
+fn rarity_color(rarity: &str) -> u32 {
+    match rarity {
+        "mythic" => style::MYTHIC,
+        "rare" => style::RARE,
+        "uncommon" => style::UNCOMMON,
+        _ => style::COMMON,
+    }
 }
 
 impl Render for DeckPanel {
@@ -201,7 +240,7 @@ impl Render for DeckPanel {
             .child(div().font_weight(FontWeight::SEMIBOLD).child("Library"))
             .child(div().text_color(rgba(style::MUTED)).child(format!("{library} cards")))
             .child(div().flex_1())
-            .child(div().text_color(rgba(style::MUTED)).child("Next draw"));
+            .child(div().text_color(rgba(style::MUTED)).child("Next draw · Left"));
 
         let rows = rows.into_iter().enumerate().map(|(index, row)| {
             let chance = if library > 0 && row.left > 0 {
@@ -209,47 +248,83 @@ impl Render for DeckPanel {
             } else {
                 String::new()
             };
+            let pips = row.pips.into_iter().map(|pip| {
+                let dot = div().size(px(10. * s)).flex_none().rounded_full();
+                match pip {
+                    Pip::Color(color) => dot.bg(rgba(style::pip(color))),
+                    Pip::Other(text) => dot
+                        .bg(rgba(style::PILL_HOVER))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(7.5 * s))
+                        .line_height(px(10. * s))
+                        .font_weight(FontWeight::BOLD)
+                        .child(text),
+                }
+            });
             div()
                 .id(("row", index))
                 .h(px(layout.deck_row()))
                 .flex_none()
-                .px(px(style::PADDING_X * s))
                 .flex()
                 .items_center()
-                .gap(px(6. * s))
-                .text_size(px(12. * s))
+                .gap(px(8. * s))
                 // None left: still listed, so the deck reads the same all game, but faint.
                 .opacity(if row.left == 0 { 0.35 } else { 1. })
                 .hover(|style| style.bg(rgba(style::HOVER)))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| this.hover(index, *hovered, cx)))
-                .child(div().w(px(14. * s)).flex_none().font_weight(FontWeight::BOLD).child(row.left.to_string()))
-                .child(div().flex_1().min_w_0().truncate().child(row.name))
-                .child(div().flex_none().flex().items_center().gap(px(2. * s)).children(row.cost.into_iter().map(
-                    |pip| {
-                        let dot = div().size(px(11. * s)).flex_none().rounded_full();
-                        match pip {
-                            Pip::Color(color) => dot.bg(rgba(style::pip(color))),
-                            Pip::Other(text) => dot
-                                .bg(rgba(style::PILL_HOVER))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(8. * s))
-                                .line_height(px(11. * s))
-                                .font_weight(FontWeight::BOLD)
-                                .child(text),
-                        }
-                    },
-                )))
+                .child(div().w(px(3.)).h_full().flex_none().bg(rgba(rarity_color(&row.rarity))))
                 .child(
                     div()
-                        .w(px(30. * s))
+                        .w(px((42. * s).round()))
+                        .h(px((30. * s).round()))
+                        .flex_none()
+                        .rounded(px(4.))
+                        .bg(rgba(style::THUMB))
+                        .children(
+                            row.thumb.map(|thumb| img(thumb).size_full().rounded(px(4.)).object_fit(ObjectFit::Cover)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2. * s))
+                        .child(
+                            div()
+                                .text_size(px(12. * s))
+                                .line_height(px(14. * s))
+                                .font_weight(FontWeight::MEDIUM)
+                                .truncate()
+                                .child(row.name),
+                        )
+                        .child(
+                            div().flex().items_center().gap(px(2. * s)).children(pips).child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .pl(px(2. * s))
+                                    .text_size(px(10. * s))
+                                    .line_height(px(12. * s))
+                                    .text_color(rgba(style::MUTED))
+                                    .child(row.type_line),
+                            ),
+                        ),
+                )
+                .child(div().flex_none().text_size(px(11. * s)).text_color(rgba(style::MUTED)).child(chance))
+                .child(
+                    div()
+                        .w(px(14. * s))
+                        .mr(px(style::PADDING_X * s))
                         .flex_none()
                         .flex()
                         .justify_end()
-                        .text_size(px(11. * s))
-                        .text_color(rgba(style::MUTED))
-                        .child(chance),
+                        .text_size(px(15. * s))
+                        .font_weight(FontWeight::BOLD)
+                        .child(row.left.to_string()),
                 )
         });
 
@@ -270,15 +345,32 @@ impl Render for DeckPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Row, merge};
+    use super::{Cost, Pip, Row, merge, pips_for};
 
     fn row(card_id: i64, name: &str, left: usize, total: usize) -> Row {
-        Row { card_id, name: name.to_string().into(), left, total, cost: Vec::new() }
+        Row {
+            card_id,
+            name: name.to_string().into(),
+            left,
+            total,
+            pips: Vec::new(),
+            type_line: "".into(),
+            rarity: String::new(),
+            thumb: None,
+        }
     }
 
     #[test]
     fn printings_of_one_card_are_one_row() {
         let rows = [row(1, "Island", 2, 3), row(2, "Spirebluff Canal", 1, 1), row(3, "Spirebluff Canal", 3, 3)];
         assert_eq!(merge(rows.into_iter()), [row(1, "Island", 2, 3), row(2, "Spirebluff Canal", 4, 4)]);
+    }
+
+    #[test]
+    fn a_spell_shows_its_cost_and_a_land_its_colours() {
+        let spell = Cost { mana_cost: "{1}{U}".into(), cmc: 2., colors: "U".into() };
+        assert_eq!(pips_for(&spell), [Pip::Other("1".into()), Pip::Color('U')]);
+        let land = Cost { mana_cost: String::new(), cmc: 0., colors: "WU".into() };
+        assert_eq!(pips_for(&land), [Pip::Color('W'), Pip::Color('U')]);
     }
 }

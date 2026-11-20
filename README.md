@@ -44,9 +44,11 @@ set) falls back to Premier Draft, and the header says so in orange.
 
 ### While playing
 
-One row per card of your deck: the copies still unseen, the name, the mana cost, and the chance
-that the next card off the top is that one. Spells come first, by mana value, then lands. A card
-you've seen every copy of stays listed, faded.
+One row per card of your deck, laid out like the draft panel: rarity on the left edge, a piece
+of the art, the name over its mana cost and type (a land shows its colours instead). On the
+right is the chance that the next card off the top is that one, and how many copies you haven't
+seen yet. Spells come first, by mana value, then lands. A card you've seen every copy of stays
+listed, faded.
 
 "Unseen" is your deck minus every card of yours that is in your hand, on the battlefield or the
 stack, in your graveyard or in exile. A card shuffled back into your library counts as unseen
@@ -93,7 +95,7 @@ not wait with it. Each keeps its own checkpoint, so a restart neither saves nor 
 twice.
 
 Win rates, card names and images come from 17Lands' public endpoints (ratings are refreshed
-every 3 hours); mana costs come from [Scryfall](https://scryfall.com). All of it is cached, so
+every 3 hours); mana costs and colours come from [Scryfall](https://scryfall.com). All of it is cached, so
 the overlays work offline with what they have.
 
 ## Develop

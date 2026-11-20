@@ -8,8 +8,8 @@
 //! - **Cards**: name, type and image for cards the ratings table leaves out (basic lands) or
 //!   that are not from the set being drafted (any deck card). Kept for good: an Arena card id
 //!   never changes meaning.
-//! - **Costs**: 17Lands has no mana costs, so those come from Scryfall, one card at a time,
-//!   also kept for good.
+//! - **Costs**: 17Lands' card lookup has no mana costs or colours, so those come from
+//!   Scryfall, one card at a time, also kept for good.
 //! - **Images**: downloaded once as WebP and turned into the two files the panels show.
 
 use std::collections::HashMap;
@@ -133,11 +133,15 @@ impl Ratings {
     }
 }
 
-/// A card's mana cost, as Scryfall writes it (`{2}{W}{U}`), and its mana value.
+/// What Scryfall adds to a card: its mana cost as Scryfall writes it (`{2}{W}{U}`), its mana
+/// value, and its colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
     pub mana_cost: String,
     pub cmc: f64,
+    /// Colour letters in WUBRG order. A card with no colours of its own (a land) has its
+    /// colour identity here instead: the colours of mana it makes or asks for.
+    pub colors: String,
 }
 
 /// A card's image as the two files the panels show.
@@ -287,10 +291,10 @@ impl Store {
         ids.iter().filter_map(|id| Some((*id, known.get(id)?.clone()))).collect()
     }
 
-    /// Mana costs for these cards, from Scryfall. Slow the first time a card is asked for
-    /// (one request each, a tenth of a second apart), instant after.
+    /// Mana costs and colours for these cards, from Scryfall. Slow the first time a card is
+    /// asked for (one request each, a tenth of a second apart), instant after.
     pub fn costs(&self, ids: &[i64]) -> HashMap<i64, Cost> {
-        let file = self.dir.join("costs.json");
+        let file = self.dir.join("scryfall.json");
         let mut guard = self.costs.lock().unwrap();
         let known = guard.get_or_insert_with(|| {
             std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
@@ -426,11 +430,20 @@ fn decode_cards(bytes: &[u8]) -> Option<Vec<Card>> {
     )
 }
 
-/// A two-faced card has its cost on the front face.
+/// A two-faced card has its cost and colours on the front face.
 fn decode_cost(text: &str) -> Option<Cost> {
     let card: serde_json::Value = serde_json::from_str(text).ok()?;
     let mana_cost = card["mana_cost"].as_str().or_else(|| card["card_faces"][0]["mana_cost"].as_str())?;
-    Some(Cost { mana_cost: mana_cost.to_string(), cmc: card["cmc"].as_f64().unwrap_or(0.) })
+    let letters = |list: &serde_json::Value| -> String {
+        let found: Vec<&str> = list.as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
+        "WUBRG".chars().filter(|c| found.iter().any(|f| f.starts_with(*c))).collect()
+    };
+    let colors = [&card["colors"], &card["card_faces"][0]["colors"], &card["color_identity"]]
+        .into_iter()
+        .map(letters)
+        .find(|colors| !colors.is_empty())
+        .unwrap_or_default();
+    Some(Cost { mana_cost: mana_cost.to_string(), cmc: card["cmc"].as_f64().unwrap_or(0.), colors })
 }
 
 /// One symbol of a mana cost.
@@ -497,13 +510,24 @@ mod tests {
     #[test]
     fn costs_come_from_the_card_or_its_front_face() {
         assert_eq!(
-            decode_cost(r#"{"mana_cost": "{2}{W}", "cmc": 3.0}"#),
-            Some(Cost { mana_cost: "{2}{W}".into(), cmc: 3. })
+            decode_cost(r#"{"mana_cost": "{2}{W}", "cmc": 3.0, "colors": ["W"], "color_identity": ["W"]}"#),
+            Some(Cost { mana_cost: "{2}{W}".into(), cmc: 3., colors: "W".into() })
         );
         assert_eq!(
-            decode_cost(r#"{"cmc": 2.0, "card_faces": [{"mana_cost": "{1}{U}"}, {"mana_cost": ""}]}"#),
-            Some(Cost { mana_cost: "{1}{U}".into(), cmc: 2. })
+            decode_cost(
+                r#"{"cmc": 2.0, "color_identity": ["G", "U"],
+                    "card_faces": [{"mana_cost": "{1}{U}", "colors": ["U"]}, {"mana_cost": "", "colors": ["G"]}]}"#
+            ),
+            Some(Cost { mana_cost: "{1}{U}".into(), cmc: 2., colors: "U".into() })
         );
+    }
+
+    #[test]
+    fn a_land_takes_its_colours_from_its_identity() {
+        let fountain = r#"{"mana_cost": "", "cmc": 0.0, "colors": [], "color_identity": ["U", "W"]}"#;
+        assert_eq!(decode_cost(fountain).unwrap().colors, "WU");
+        let wastes = r#"{"mana_cost": "", "cmc": 0.0, "colors": [], "color_identity": []}"#;
+        assert_eq!(decode_cost(wastes).unwrap().colors, "");
     }
 
     #[test]
