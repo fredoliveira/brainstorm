@@ -5582,7 +5582,8 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "recall-core"
-version = "0.4.1"
+version = "0.5.0"
+source = "git+https://github.com/fredoliveira/recall?tag=v0.5.0#45eae2cc9cadea034cf146d5aac9a22b8bd13b21"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

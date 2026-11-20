@@ -11,7 +11,8 @@ An MTG Arena companion for macOS. One app in the menu bar that follows Arena's l
 
 It brings [Recall](https://github.com/fredoliveira/recall)'s desktop app and
 [Ponder](https://github.com/fredoliveira/ponder) under one roof, on the same log parser
-(`recall-core`). "Brainstorm" is a working name.
+(`recall-core`). The name is the third of the blue card-drawing spells, after Ancestral Recall and
+Ponder: draw three, then put two back.
 
 ## Using it
 
@@ -98,9 +99,11 @@ the overlays work offline with what they have.
 ## Develop
 
 You'll need Rust via [rustup](https://rustup.rs) (the toolchain is pinned in
-`rust-toolchain.toml`) and [just](https://github.com/casey/just). `recall-core` is a path
-dependency for now, so this needs a checkout of Recall beside it at `../recall`, at a commit
-that has `recall_core::live` (on `main`, not yet in a release).
+`rust-toolchain.toml`) and [just](https://github.com/casey/just).
+
+The Recall parser is pinned to a release tag in [`Cargo.toml`](Cargo.toml). To try unreleased
+parser changes, point it at a local checkout with `path = "../recall/crates/core"` while you
+work, and don't commit that.
 
 ```sh
 just run          # follow Arena's live log
@@ -112,7 +115,7 @@ just bundle       # dist/Brainstorm.app for this Mac
 
 **A development build never uploads to the live 17Lands API.** With a token saved it uploads
 only where `BRAINSTORM_HOST` points, and holds uploads otherwise. To exercise uploading, run
-Recall's mock server and point at it:
+the mock server from a checkout of Recall and point at it:
 
 ```sh
 python3 ../recall/tools/mock_server.py 8732 /tmp/brainstorm-out.jsonl &
@@ -168,9 +171,8 @@ Two things worth knowing before changing the overlays:
 
 ### Not done yet
 
-- A release workflow (notarization) and a Homebrew cask: both wait for the name and a repository.
+- A release workflow (notarization) and a Homebrew cask: both wait for a repository.
 - The icon is a placeholder, drawn by `scripts/icon.swift`.
-- `recall-core` is a path dependency: pin a Recall release tag once one has `live`.
 
 ## Credits
 
