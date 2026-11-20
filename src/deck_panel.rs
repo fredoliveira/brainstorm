@@ -326,7 +326,8 @@ impl Render for DeckPanel {
                         .flex_none()
                         .flex()
                         .justify_end()
-                        .text_size(px(15. * s))
+                        // The same size as the chance beside it; weight and colour tell them apart.
+                        .text_size(px(11. * s))
                         .font_weight(FontWeight::BOLD)
                         .child(row.left.to_string()),
                 )
