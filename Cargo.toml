@@ -1,0 +1,59 @@
+[package]
+name = "brainstorm"
+description = "Brainstorm - an MTG Arena companion: saves your drafts and games, shows overlays as you play"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+# gpui-kit pins the matching GPUI snapshot (gpui-pre), so the two never drift apart.
+gpui-kit = "=0.9.0"
+smol = "2"
+# `std` provides `set_boxed_logger` for the window's log sink.
+log = { version = "0.4", features = ["std"] }
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Settings file.
+toml = "0.8"
+dirs = "5"
+# 17Lands card data and card images (blocking, on background threads), as in recall-core.
+ureq = "2"
+# Card images arrive as WebP; the panels show an art crop and a preview made from them.
+image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
+# The log parser. A sibling checkout while the core grows what this app needs (events during a
+# game, a follower that runs without a 17Lands token); pin a release tag before shipping.
+recall-core = { path = "../recall/crates/core" }
+# The menu-bar icon. GPUI has no status-item API of its own.
+tray-icon = "0.26"
+# The way from a GPUI window to its NSWindow (see `src/native.rs`).
+raw-window-handle = "0.6"
+
+# The same versions GPUI builds on.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "objc2-core-foundation",
+] }
+core-graphics = "0.24"
+core-foundation = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Decoding and resizing card images is far too slow unoptimized.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
