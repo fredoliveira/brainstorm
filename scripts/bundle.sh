@@ -3,12 +3,16 @@
 # timestamp, as notarization requires).
 #
 #   scripts/bundle.sh                    this machine's architecture
-#   scripts/bundle.sh --universal        Apple Silicon + Intel in one binary
-#   scripts/bundle.sh --universal --dmg  also dist/Brainstorm-universal.dmg
+#   scripts/bundle.sh --universal        Apple Silicon + Intel in one binary (what ships)
+#   scripts/bundle.sh --universal --dmg  also dist/Brainstorm.dmg
+#   scripts/bundle.sh --dmg-only         wrap the dist/Brainstorm.app already there, untouched
+#
+# --dmg-only is for the release workflow, which notarizes and staples the app between the two
+# steps so the app inside the disk image carries its own ticket.
 #
 # BRAINSTORM_SIGN_IDENTITY picks the certificate; without it the first "Developer ID
 # Application" in the keychain is used, and with none at all the app is signed ad hoc (runs
-# here, cannot be notarized). Nothing here notarizes.
+# here, cannot be notarized). Notarizing is the release workflow's job, not this script's.
 #
 # The bundle is the real thing: with a 17Lands token in its settings it uploads to the live
 # host, which a development build never does.
@@ -16,11 +20,13 @@ set -eu
 
 universal=false
 dmg=false
+build=true
 for arg in "$@"; do
   case "$arg" in
     --universal) universal=true ;;
     --dmg) dmg=true ;;
-    *) echo "usage: bundle.sh [--universal] [--dmg]" >&2; exit 2 ;;
+    --dmg-only) dmg=true build=false ;;
+    *) echo "usage: bundle.sh [--universal] [--dmg | --dmg-only]" >&2; exit 2 ;;
   esac
 done
 
@@ -36,30 +42,31 @@ cd "$root"
 identity=${BRAINSTORM_SIGN_IDENTITY:-$(security find-identity -v -p codesigning |
   sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n1)}
 
-# Built before the old bundle is touched: a build takes minutes, and the app may be running.
-if $universal; then
-  for target in aarch64-apple-darwin x86_64-apple-darwin; do
-    echo "Building for ${target}…"
-    cargo "+$toolchain" build --release --locked --target "$target"
-  done
-else
-  echo "Building…"
-  cargo "+$toolchain" build --release --locked
-fi
+if $build; then
+  # Built before the old bundle is touched: a build takes minutes, and the app may be running.
+  if $universal; then
+    for target in aarch64-apple-darwin x86_64-apple-darwin; do
+      echo "Building for ${target}…"
+      cargo "+$toolchain" build --release --locked --target "$target"
+    done
+  else
+    echo "Building…"
+    cargo "+$toolchain" build --release --locked
+  fi
 
-rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-if $universal; then
-  lipo -create -output "$app/Contents/MacOS/Brainstorm" \
-    "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
-else
-  cp "target/release/$bin" "$app/Contents/MacOS/Brainstorm"
-fi
+  rm -rf "$app"
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+  if $universal; then
+    lipo -create -output "$app/Contents/MacOS/Brainstorm" \
+      "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+  else
+    cp "target/release/$bin" "$app/Contents/MacOS/Brainstorm"
+  fi
 
-cp "$root/assets/icon.icns" "$app/Contents/Resources/Brainstorm.icns"
+  cp "$root/assets/icon.icns" "$app/Contents/Resources/Brainstorm.icns"
 
-# LSUIElement: a menu-bar app, with no Dock icon from the first moment of launch.
-cat > "$app/Contents/Info.plist" <<PLIST
+  # LSUIElement: a menu-bar app, with no Dock icon from the first moment of launch.
+  cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -82,18 +89,21 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [ -n "$identity" ]; then
-  echo "Signing as ${identity}…"
-  codesign --force --options runtime --timestamp --sign "$identity" "$app"
+  if [ -n "$identity" ]; then
+    echo "Signing as ${identity}…"
+    codesign --force --options runtime --timestamp --sign "$identity" "$app"
+  else
+    echo "No Developer ID certificate found: signing ad hoc (cannot be notarized)." >&2
+    codesign --force --sign - "$app"
+  fi
+  codesign --verify --strict --verbose=2 "$app"
+  echo "Done: $app ($(du -sh "$app" | cut -f1))"
 else
-  echo "No Developer ID certificate found: signing ad hoc (cannot be notarized)." >&2
-  codesign --force --sign - "$app"
+  test -d "$app" || { echo "no $app to wrap: build it first" >&2; exit 1; }
 fi
-codesign --verify --strict --verbose=2 "$app"
-echo "Done: $app ($(du -sh "$app" | cut -f1))"
 
 if $dmg; then
-  out="$dist/Brainstorm-universal.dmg"
+  out="$dist/Brainstorm.dmg"
   staging=$(mktemp -d)
   trap 'rm -rf "$staging"' EXIT
   cp -R "$app" "$staging/Brainstorm.app"

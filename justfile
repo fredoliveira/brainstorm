@@ -23,8 +23,17 @@ demo WHAT="draft":
 bundle *ARGS:
     scripts/bundle.sh {{ARGS}}
 
-# Pre-commit gate: format check, clippy, tests.
+# Build the universal app and dist/Brainstorm.dmg, signed but not notarized.
+dmg:
+    scripts/bundle.sh --universal --dmg
+
+# Reflow all Markdown to 100 columns (Prettier via npx; config in .prettierrc).
+fmt-md:
+    npx --yes prettier@3 --write "**/*.md"
+
+# Pre-commit gate, mirroring CI: format checks, clippy, tests.
 lint:
     cargo +{{toolchain}} fmt --check
+    npx --yes prettier@3 --check "**/*.md"
     cargo +{{toolchain}} clippy --locked --all-targets -- -D warnings
     cargo +{{toolchain}} test

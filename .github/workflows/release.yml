@@ -1,0 +1,231 @@
+# Builds, signs and notarizes the universal Brainstorm.dmg for a `v*` tag and publishes it as a
+# GitHub release. Run it by hand (workflow_dispatch) to get the .dmg as a build artifact only.
+#
+# Signing + notarization need six repo secrets, the same ones Recall's and Ponder's releases
+# use:
+#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  that .p12's password
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_API_ISSUER            App Store Connect API issuer id
+#   APPLE_API_KEY               App Store Connect API key id
+#   APPLE_API_KEY_P8            contents of that key's AuthKey_<id>.p8
+# A tagged release refuses to ship without them; a manual run without them builds unsigned.
+#
+# A tagged release then bumps the Homebrew cask in fredoliveira/homebrew-tap (the `tap` job,
+# see packaging/homebrew/README.md), which needs a TAP_PUSH_TOKEN secret.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Brainstorm.dmg (macos universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The bundle is stamped with the version in Cargo.toml.
+      - name: Check the tag matches the version in Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the Cargo.toml version ($version)"
+            exit 1
+          fi
+
+      # The toolchain is pinned in rust-toolchain.toml; the bundle script builds with exactly
+      # that one, for both architectures.
+      - name: Install Rust toolchain
+        run: |
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel" --profile minimal \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Nothing ships that has not passed its tests on the tagged commit.
+      - name: Test
+        run: cargo test --locked
+
+      - name: Check signing secrets
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
+            eval "value=\${$name}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -z "$missing" ]; then
+            # notarytool wants the API key as a file.
+            umask 077
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "::error::Refusing to release an unsigned app. Missing secrets:$missing"
+            exit 1
+          else
+            echo "::warning::Building UNSIGNED (not notarized). Missing secrets:$missing"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # codesign finds the certificate in a keychain, so put it in a temporary one that only
+      # this job's signing tools may use.
+      - name: Import the signing certificate
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          umask 077
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -f pkcs12 -k "$keychain" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      # Builds both architectures into one binary, assembles Brainstorm.app and signs it
+      # (hardened runtime). Without the secrets the script finds no certificate and signs ad
+      # hoc.
+      - name: Build the universal app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+            export BRAINSTORM_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY"
+          fi
+          scripts/bundle.sh --universal
+
+      # The app is notarized and stapled before it goes into the disk image, so the copy a
+      # user drags to Applications carries its own ticket and opens offline.
+      - name: Notarize and staple the app
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          app=dist/Brainstorm.app
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Brainstorm.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Brainstorm.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait
+          # Fails unless the submission above was accepted.
+          xcrun stapler staple "$app"
+
+      - name: Build the .dmg
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+            export BRAINSTORM_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY"
+          fi
+          scripts/bundle.sh --dmg-only
+
+      # The disk image is notarized too, so the download itself opens cleanly. Stapling
+      # changes the file, so this runs before the upload: the cask's sha256 is taken from
+      # the artifact.
+      - name: Notarize and staple the .dmg
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          xcrun notarytool submit dist/Brainstorm.dmg \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait
+          # Fails unless the submission above was accepted.
+          xcrun stapler staple dist/Brainstorm.dmg
+
+      # Prove the result on the file that ships: Gatekeeper accepts the disk image, and the
+      # app inside it is validly signed, stapled and allowed to launch.
+      - name: Verify the .dmg and the app inside it
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          dmg=dist/Brainstorm.dmg
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+
+          mount="$(mktemp -d)"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount"
+          trap 'hdiutil detach "$mount" -quiet || true' EXIT
+          app="$(find "$mount" -maxdepth 1 -name '*.app' | head -n1)"
+          test -n "$app" || { echo "no .app inside the .dmg"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+
+      - name: Remove the API key and the signing keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/certificate.p12"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: brainstorm-universal
+          path: dist/Brainstorm.dmg
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/Brainstorm.dmg
+          generate_release_notes: true
+
+  # Push the cask bump to fredoliveira/homebrew-tap. Needs a TAP_PUSH_TOKEN secret
+  # (fine-grained PAT with contents:write on the tap repo); skips quietly if unset.
+  tap:
+    name: Bump Homebrew cask
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: brainstorm-universal
+          path: dist
+
+      - name: Regenerate cask and push to the tap
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TAP_PUSH_TOKEN" ]; then
+            echo "TAP_PUSH_TOKEN secret not set; skipping tap bump"
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          sha="$(shasum -a 256 dist/Brainstorm.dmg | cut -d' ' -f1)"
+          git clone "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/fredoliveira/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          sh packaging/homebrew/generate.sh "$version" "$sha" > tap/Casks/brainstorm.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/brainstorm.rb
+          git commit -m "brainstorm ${version}"
+          # Recall's and Ponder's workflows push to the same tap; rebase and retry.
+          for _ in 1 2 3; do git push && break; git pull --rebase; done

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # macOS only: the app is a macOS app (AppKit panels, CoreGraphics window lookup).
+  test:
+    name: fmt + clippy + test + build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The toolchain is pinned in rust-toolchain.toml, since GPUI needs a recent one.
+      - name: Install Rust toolchain
+        run: |
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel" --profile minimal --component clippy,rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Markdown format check
+        run: npx --yes prettier@3 --check "**/*.md"
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release
+        run: cargo build --locked --release

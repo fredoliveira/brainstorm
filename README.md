@@ -14,6 +14,17 @@ It brings [Recall](https://github.com/fredoliveira/recall)'s desktop app and
 (`recall-core`). The name is the third of the blue card-drawing spells, after Ancestral Recall and
 Ponder: draw three, then put two back.
 
+## Install
+
+There is no release yet. Until the first one, build the app from source (see [Develop](#develop)):
+
+```sh
+just bundle && open dist/Brainstorm.app
+```
+
+Releases will be signed, notarized, and installable with
+`brew install --cask fredoliveira/tap/brainstorm`.
+
 ## Using it
 
 1. In Arena, turn on **Detailed Logs**: gear icon → Account → "Detailed Logs". Without it, Arena
@@ -110,6 +121,7 @@ just demo         # a made-up pack beside Arena's window, whether or not Arena i
 just demo game    # ...or a made-up game, for the deck overlay
 just lint         # format check, clippy, tests
 just bundle       # dist/Brainstorm.app for this Mac
+just dmg          # universal app + dist/Brainstorm.dmg
 ```
 
 **A development build never uploads to the live 17Lands API.** With a token saved it uploads only
@@ -167,10 +179,19 @@ Two things worth knowing before changing the overlays:
 - A panel asks for `overlay::sync` itself (`cx.defer`) whenever its size or hovered row changes.
   Observers run after the update that notified them, so a sync called from that update is too early.
 
-### Not done yet
+### Releases
 
-- A release workflow (notarization) and a Homebrew cask: both wait for a repository.
-- The icon is a placeholder, drawn by `scripts/icon.swift`.
+Bump the version in [`Cargo.toml`](Cargo.toml) (and let `cargo build` update `Cargo.lock`), move the
+changelog's Unreleased entries under the new version, commit, and push a matching tag (`v0.1.0`).
+[`.github/workflows/release.yml`](.github/workflows/release.yml) tests the tagged commit, builds the
+universal app, signs and notarizes it and the `.dmg`, publishes a GitHub release, and bumps the
+Homebrew cask. It needs seven repository secrets, listed in
+[`packaging/homebrew/README.md`](packaging/homebrew/README.md).
+
+`scripts/bundle.sh` signs with the first "Developer ID Application" certificate in your keychain, or
+ad hoc when there's none (fine for running locally).
+
+The app icon is a placeholder, drawn by `scripts/icon.swift` into `assets/icon.png`.
 
 ## Credits
 
