@@ -18,5 +18,7 @@ All notable changes to this project are documented here. The format is based on
 - Your drafts and games saved on your Mac, one file per day.
 - Uploads to 17Lands, once you give it your token. Without one, nothing leaves your Mac.
 - A menu-bar icon, a window with the log of what Brainstorm did, and Settings.
+- An app icon: a thinker with three lights around her head, in homage to Tony DiTerlizzi's art for
+  the card Brainstorm.
 
 [Unreleased]: https://github.com/fredoliveira/brainstorm/commits/main
