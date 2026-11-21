@@ -22,13 +22,26 @@ pub struct Settings {
     pub deck_overlay: bool,
     /// Draw the overlays at 80%.
     pub compact: bool,
+    /// The draft overlay is folded away into a tab on Arena's right edge.
+    pub draft_collapsed: bool,
+    /// The deck overlay is.
+    pub deck_collapsed: bool,
     /// Whose games the win rates come from.
     pub group: Group,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { token: None, save: true, draft_overlay: true, deck_overlay: true, compact: false, group: Group::All }
+        Self {
+            token: None,
+            save: true,
+            draft_overlay: true,
+            deck_overlay: true,
+            compact: false,
+            draft_collapsed: false,
+            deck_collapsed: false,
+            group: Group::All,
+        }
     }
 }
 

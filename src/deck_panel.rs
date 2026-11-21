@@ -10,9 +10,10 @@ use std::path::PathBuf;
 
 use gpui_kit::*;
 
+use crate::Shared;
 use crate::cards::{self, Art, Card, Cost, Pip};
 use crate::game::Game;
-use crate::overlay;
+use crate::overlay::{self, Shape};
 use crate::settings::Settings;
 use crate::style::{self, Layout};
 
@@ -97,21 +98,28 @@ impl DeckPanel {
         merge(rows.into_iter().map(|(_, _, row)| row))
     }
 
-    /// The panel's size, or `None` when it has nothing to show.
-    pub fn size(&self, cx: &App) -> Option<(f32, f32)> {
-        if !self.prefs.read(cx).deck_overlay {
+    /// What the panel's window should be, or `None` when it has nothing to show.
+    pub fn shape(&self, cx: &App) -> Option<Shape> {
+        let prefs = self.prefs.read(cx);
+        if !prefs.deck_overlay {
             return None;
         }
         let rows = self.rows(cx).len();
         if rows == 0 {
             return None;
         }
+        if prefs.deck_collapsed {
+            return Some(Shape::Tab);
+        }
         let layout = self.layout(cx);
-        Some((layout.width(), layout.height(rows, layout.deck_row())))
+        Some(Shape::Open(layout.width(), layout.height(rows, layout.deck_row())))
     }
 
     /// The hovered row's card image and where the row's middle is, down from the panel's top.
     pub fn preview(&self, cx: &App) -> Option<(f32, PathBuf)> {
+        if self.prefs.read(cx).deck_collapsed {
+            return None;
+        }
         let index = self.hovered?;
         let rows = self.rows(cx);
         let image = self.art.get(&rows.get(index)?.card_id)?.full.clone();
@@ -123,6 +131,10 @@ impl DeckPanel {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         cx.notify();
         cx.defer(overlay::sync);
+        // Its rows are gone, and with them the event that would say the pointer left one.
+        if self.prefs.read(cx).deck_collapsed {
+            self.hovered = None;
+        }
 
         let Some(view) = &self.game.read(cx).view else {
             self.hovered = None;
@@ -189,6 +201,14 @@ impl DeckPanel {
             cx.defer(overlay::sync);
         }
     }
+
+    /// Collapse the panel to its tab, or open it again, and remember which.
+    fn toggle(&mut self, cx: &mut Context<Self>) {
+        let state = cx.global::<Shared>().state.clone();
+        if let Err(err) = state.update_settings(|settings| settings.deck_collapsed = !settings.deck_collapsed) {
+            log::warn!(target: "brainstorm", "{err}");
+        }
+    }
 }
 
 /// What a row shows for a card's colours: its mana cost, or for a card without one (a land)
@@ -229,14 +249,18 @@ impl Render for DeckPanel {
         let layout = self.layout(cx);
         let s = layout.scale;
         let rows = self.rows(cx);
-        let Some(view) = self.game.read(cx).view.as_ref() else { return div() };
+        let Some(view) = self.game.read(cx).view.as_ref() else { return div().into_any_element() };
+        if self.prefs.read(cx).deck_collapsed {
+            return overlay::tab().on_click(cx.listener(|this, _, _, cx| this.toggle(cx))).into_any_element();
+        }
         // What the counts are out of: the library itself when its size is known.
         let library = view.library.unwrap_or_else(|| rows.iter().map(|row| row.left).sum());
 
         let header = div()
             .h(px(layout.header()))
             .flex_none()
-            .px(px(style::PADDING_X * s))
+            .pl(px(style::PADDING_X * s))
+            .pr(px(style::HEADER_END * s))
             .flex()
             .items_center()
             .gap(px(6. * s))
@@ -244,7 +268,8 @@ impl Render for DeckPanel {
             .child(div().font_weight(FontWeight::SEMIBOLD).child("Library"))
             .child(div().text_color(rgba(style::MUTED)).child(format!("{library} cards")))
             .child(div().flex_1())
-            .child(div().text_color(rgba(style::MUTED)).child("Next draw · Left"));
+            .child(div().text_color(rgba(style::MUTED)).child("Next draw · Left"))
+            .child(overlay::collapse_button(s).on_click(cx.listener(|this, _, _, cx| this.toggle(cx))));
 
         let rows = rows.into_iter().enumerate().map(|(index, row)| {
             let chance = if library > 0 && row.left > 0 {
@@ -345,6 +370,7 @@ impl Render for DeckPanel {
             .text_color(rgba(style::TEXT))
             .child(header)
             .children(rows)
+            .into_any_element()
     }
 }
 

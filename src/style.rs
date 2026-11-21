@@ -45,6 +45,8 @@ impl Layout {
 pub const RADIUS: f32 = 10.;
 pub const HEADER_TEXT: f32 = 11.;
 pub const PADDING_X: f32 = 10.;
+/// Between the collapse button that ends a header and the panel's right side.
+pub const HEADER_END: f32 = 6.;
 
 // 0xRRGGBBAA
 pub const PANEL: u32 = 0x12141AF0;
@@ -87,6 +89,12 @@ pub const ANCHOR_INSET: f64 = 8.;
 /// Down from Arena's top edge, as a share of the window's height: just below the draft
 /// screen's header row at any window size.
 pub const ANCHOR_DROP: f64 = 0.16;
+
+/// A collapsed panel: a tab flush against Arena's right edge, at the height the panel hangs
+/// from. Not scaled with the panels, so it stays easy to hit.
+pub const TAB_WIDTH: f32 = 14.;
+pub const TAB_HEIGHT: f32 = 56.;
+pub const TAB_RADIUS: f32 = 7.;
 
 /// The card shown beside a row under the pointer.
 pub const PREVIEW_WIDTH: f64 = 280.;

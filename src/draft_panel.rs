@@ -8,7 +8,7 @@ use crate::Shared;
 use crate::cards::{self, Art, Card, Group};
 use crate::draft::Draft;
 use crate::feed::Pack;
-use crate::overlay;
+use crate::overlay::{self, Shape};
 use crate::settings::Settings;
 use crate::style::{self, Layout};
 
@@ -60,17 +60,24 @@ impl DraftPanel {
         Layout::new(self.prefs.read(cx).compact)
     }
 
-    /// The panel's size, or `None` when it has nothing to show.
-    pub fn size(&self, cx: &App) -> Option<(f32, f32)> {
-        if !self.prefs.read(cx).draft_overlay || self.shown.is_none() || self.rows.is_empty() {
+    /// What the panel's window should be, or `None` when it has nothing to show.
+    pub fn shape(&self, cx: &App) -> Option<Shape> {
+        let prefs = self.prefs.read(cx);
+        if !prefs.draft_overlay || self.shown.is_none() || self.rows.is_empty() {
             return None;
         }
+        if prefs.draft_collapsed {
+            return Some(Shape::Tab);
+        }
         let layout = self.layout(cx);
-        Some((layout.width(), layout.height(self.rows.len(), layout.draft_row())))
+        Some(Shape::Open(layout.width(), layout.height(self.rows.len(), layout.draft_row())))
     }
 
     /// The hovered row's card image and where the row's middle is, down from the panel's top.
     pub fn preview(&self, cx: &App) -> Option<(f32, PathBuf)> {
+        if self.prefs.read(cx).draft_collapsed {
+            return None;
+        }
         let index = self.hovered?;
         let image = self.rows.get(index)?.art.as_ref()?.full.clone();
         let layout = self.layout(cx);
@@ -82,6 +89,10 @@ impl DraftPanel {
         // The size setting may be what changed.
         cx.notify();
         cx.defer(overlay::sync);
+        // Its rows are gone, and with them the event that would say the pointer left one.
+        if self.prefs.read(cx).draft_collapsed {
+            self.hovered = None;
+        }
 
         let group = self.prefs.read(cx).group;
         let Some(pack) = self.draft.read(cx).pack.clone() else {
@@ -155,6 +166,14 @@ impl DraftPanel {
             log::warn!(target: "brainstorm", "{err}");
         }
     }
+
+    /// Collapse the panel to its tab, or open it again, and remember which.
+    fn toggle(&mut self, cx: &mut Context<Self>) {
+        let state = cx.global::<Shared>().state.clone();
+        if let Err(err) = state.update_settings(|settings| settings.draft_collapsed = !settings.draft_collapsed) {
+            log::warn!(target: "brainstorm", "{err}");
+        }
+    }
 }
 
 /// The pack's rows, best win rate first, and a note when the ratings are another format's.
@@ -213,7 +232,10 @@ impl Render for DraftPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = self.layout(cx);
         let s = layout.scale;
-        let Some((pack, shown_group)) = self.shown.clone() else { return div() };
+        let Some((pack, shown_group)) = self.shown.clone() else { return div().into_any_element() };
+        if self.prefs.read(cx).draft_collapsed {
+            return overlay::tab().on_click(cx.listener(|this, _, _, cx| this.toggle(cx))).into_any_element();
+        }
         let group = self.prefs.read(cx).group;
 
         let header = div()
@@ -221,7 +243,8 @@ impl Render for DraftPanel {
             .group("header")
             .h(px(layout.header()))
             .flex_none()
-            .px(px(style::PADDING_X * s))
+            .pl(px(style::PADDING_X * s))
+            .pr(px(style::HEADER_END * s))
             .flex()
             .items_center()
             .gap(px(6. * s))
@@ -252,7 +275,12 @@ impl Render for DraftPanel {
                     .opacity(if shown_group == group { 1. } else { 0.45 })
                     .child(group.label()),
             )
-            .child(div().flex_none().text_color(rgba(style::MUTED)).child("GIH WR"));
+            .child(div().flex_none().text_color(rgba(style::MUTED)).child("GIH WR"))
+            // The one part of the header that does not switch the group.
+            .child(overlay::collapse_button(s).on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle(cx);
+            })));
 
         let rows = self.rows.iter().enumerate().map(|(index, row)| {
             let card = row.card.as_ref();
@@ -339,6 +367,7 @@ impl Render for DraftPanel {
             .text_color(rgba(style::TEXT))
             .child(header)
             .children(rows)
+            .into_any_element()
     }
 }
 

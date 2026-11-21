@@ -38,6 +38,10 @@ The overlays hang off the top-right of Arena's window and show only while Arena 
 They follow Arena into fullscreen and never take focus from the game. Hover a row to see the whole
 card.
 
+An overlay in the way of the game folds away: click the arrow at the end of its header and it
+becomes a small tab on Arena's right edge. Click the tab to open it again. Each overlay remembers
+which way you left it, so you can keep the ratings open and the library tucked away.
+
 Brainstorm reads the log from the start each time it opens, so a draft or a game already under way
 is picked up where it stands.
 
@@ -173,13 +177,16 @@ overlay for wherever the file ends, without touching your real settings and data
 
 `arena.rs` and `native.rs` are the only platform-specific files.
 
-Two things worth knowing before changing the overlays:
+Three things worth knowing before changing the overlays:
 
 - A window is moved or resized from a task, never from inside a GPUI update (see `overlay::sync`).
   Resizing calls back into GPUI, which drops the call while it is busy, and the window is then drawn
   at its old size.
 - A panel asks for `overlay::sync` itself (`cx.defer`) whenever its size or hovered row changes.
   Observers run after the update that notified them, so a sync called from that update is too early.
+- An overlay's window is borderless and has no `gpui_kit` root (see `native.rs` and
+  `overlay::open_panel`). A titled window gets its corners rounded by macOS, and the kit's root
+  paints the theme's background behind the panel; a collapsed tab needs neither.
 
 ### Releases
 

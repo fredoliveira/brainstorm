@@ -5,10 +5,14 @@
 //! [`sync`] decides whether each shows and where. It runs when a panel's contents change
 //! (the panels ask for it) and twice a second from `main.rs`, since nothing announces
 //! Arena's window moving or another app coming to the front.
+//!
+//! A panel in the way of the game can be collapsed: its window shrinks to a [`tab`] against
+//! Arena's right edge, and a click on that opens it again.
 
 use std::path::PathBuf;
 
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName};
 use gpui_kit::*;
 
 use crate::arena::{self, Arena};
@@ -79,6 +83,59 @@ struct Overlays {
 
 impl Global for Overlays {}
 
+/// What a panel's window should be.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    /// The panel itself, this wide and tall.
+    Open(f32, f32),
+    /// Collapsed to a tab.
+    Tab,
+}
+
+/// A collapsed panel: all of its window. The panel adds the click that opens it again.
+pub fn tab() -> Stateful<Div> {
+    div()
+        .id("tab")
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        // Flush against Arena's edge on the right, so only the left corners are round.
+        .rounded_l(px(style::TAB_RADIUS))
+        .border_1()
+        .border_color(rgba(style::BORDER))
+        .bg(rgba(style::PANEL))
+        .text_color(rgba(style::MUTED))
+        .hover(|style| style.text_color(rgba(style::TEXT)))
+        .child(Icon::new(IconName::ChevronLeft).size(px(12.)))
+}
+
+/// The control at the end of a panel's header that collapses it. The panel adds the click.
+pub fn collapse_button(scale: f32) -> Stateful<Div> {
+    div()
+        .id("collapse")
+        .size(px(18. * scale))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4. * scale))
+        .text_color(rgba(style::MUTED))
+        .hover(|style| style.bg(rgba(style::PILL_HOVER)).text_color(rgba(style::TEXT)))
+        .child(Icon::new(IconName::ChevronRight).size(px(12. * scale)))
+}
+
+/// All there is in an overlay's window besides the panel. `gpui_kit::open_window` would put
+/// its own root there, which paints the theme's background over the whole window: behind a
+/// panel's round corners, and where a see-through panel should show the game.
+struct Bare<V>(Entity<V>);
+
+impl<V: Render> Render for Bare<V> {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().font_family(cx.theme().font_family.clone()).child(self.0.clone())
+    }
+}
+
 /// One hidden pop-up window with `view` in it, and the panel behind it.
 fn open_panel<V: Render>(
     cx: &mut App,
@@ -98,13 +155,15 @@ fn open_panel<V: Render>(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let mut panel = None;
-    let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
+    let (mut panel, mut view) = (None, None);
+    cx.open_window(options, |window, cx| {
         panel = Panel::of(window);
-        cx.new(build)
+        let built = cx.new(build);
+        view = Some(built.clone());
+        cx.new(|_| Bare(built))
     })
     .map_err(|e| format!("{e:#}"))?;
-    Ok((panel.ok_or("an overlay window has no NSPanel")?, view))
+    panel.zip(view).ok_or_else(|| "an overlay window has no NSPanel".to_string())
 }
 
 pub fn open(
@@ -131,19 +190,19 @@ pub fn open(
 pub fn sync(cx: &mut App) {
     let Some(overlays) = cx.try_global::<Overlays>() else { return };
     let (draft, deck) = (overlays.draft.1.read(cx), overlays.deck.1.read(cx));
-    let deck_size = deck.size(cx);
+    let deck_shape = deck.shape(cx);
     // A game is on: a pack left over from the draft has no business showing.
-    let draft_size = if deck_size.is_some() { None } else { draft.size(cx) };
-    let panels = [(overlays.draft.0, draft_size, draft.preview(cx)), (overlays.deck.0, deck_size, deck.preview(cx))];
+    let draft_shape = if deck_shape.is_some() { None } else { draft.shape(cx) };
+    let panels = [(overlays.draft.0, draft_shape, draft.preview(cx)), (overlays.deck.0, deck_shape, deck.preview(cx))];
     let (preview_panel, preview_view) = (overlays.preview.0, overlays.preview.1.clone());
     // Nothing to show: Arena's window isn't even looked for.
-    let anchor = if panels.iter().any(|(_, size, _)| size.is_some()) { overlays.visibility.anchor() } else { None };
+    let anchor = if panels.iter().any(|(_, shape, _)| shape.is_some()) { overlays.visibility.anchor() } else { None };
 
     // Where each window goes, or `None` to hide it.
     let mut moves: Vec<(Panel, Option<CGRect>)> = Vec::new();
     let mut preview = None;
-    for (panel, size, hovered) in panels {
-        let frame = anchor.zip(size).map(|(anchor, size)| frame(&anchor, size));
+    for (panel, shape, hovered) in panels {
+        let frame = anchor.zip(shape).map(|(anchor, shape)| frame(&anchor, &arena::display_for(&anchor), shape));
         if let Some((frame, (row, image))) = frame.zip(hovered) {
             preview = Some((frame, row, image));
         }
@@ -177,13 +236,16 @@ pub fn sync(cx: &mut App) {
     .detach();
 }
 
-/// Where a panel of `size` goes: its top-right corner at the anchor point, kept on Arena's
-/// display.
-fn frame(anchor: &CGRect, size: (f32, f32)) -> CGRect {
-    let (width, height) = (f64::from(size.0), f64::from(size.1));
-    let right = anchor.origin.x + anchor.size.width - style::ANCHOR_INSET;
+/// Where a panel goes in Arena's window (`anchor`): an open one hangs by its top-right corner
+/// from a point just inside the window, a tab sits right against the window's edge at the
+/// same height. Either is kept on `display`.
+fn frame(anchor: &CGRect, display: &CGRect, shape: Shape) -> CGRect {
+    let (width, height, inset) = match shape {
+        Shape::Open(width, height) => (f64::from(width), f64::from(height), style::ANCHOR_INSET),
+        Shape::Tab => (f64::from(style::TAB_WIDTH), f64::from(style::TAB_HEIGHT), 0.),
+    };
+    let right = anchor.origin.x + anchor.size.width - inset;
     let top = anchor.origin.y + anchor.size.height * style::ANCHOR_DROP;
-    let display = arena::display_for(anchor);
     let x = fit(right - width, display.origin.x, display.origin.x + display.size.width - width);
     let y = fit(top, display.origin.y, display.origin.y + display.size.height - height);
     CGRect::new(&CGPoint::new(x, y), &CGSize::new(width, height))
@@ -213,7 +275,34 @@ fn fit(at: f64, min: f64, max: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+
+    use super::{Shape, fit, frame, style};
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect::new(&CGPoint::new(x, y), &CGSize::new(width, height))
+    }
+
+    #[test]
+    fn an_open_panel_hangs_inside_arena_and_a_tab_sits_on_its_edge() {
+        let (arena, display) = (rect(100., 50., 1000., 800.), rect(0., 0., 1440., 900.));
+        let top = 50. + 800. * style::ANCHOR_DROP;
+
+        let open = frame(&arena, &display, Shape::Open(300., 400.));
+        assert_eq!((open.origin.x + open.size.width, open.origin.y), (1100. - style::ANCHOR_INSET, top));
+        assert_eq!((open.size.width, open.size.height), (300., 400.));
+
+        let tab = frame(&arena, &display, Shape::Tab);
+        assert_eq!((tab.origin.x + tab.size.width, tab.origin.y), (1100., top));
+        assert_eq!(tab.size.width, f64::from(style::TAB_WIDTH));
+    }
+
+    #[test]
+    fn a_tab_stays_on_the_display_when_arena_runs_off_it() {
+        let (arena, display) = (rect(1000., 0., 1000., 800.), rect(0., 0., 1440., 900.));
+        let tab = frame(&arena, &display, Shape::Tab);
+        assert_eq!(tab.origin.x + tab.size.width, 1440.);
+    }
 
     #[test]
     fn fit_keeps_a_value_in_range() {
