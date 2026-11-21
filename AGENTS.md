@@ -76,5 +76,5 @@ needs are listed in `packaging/homebrew/README.md`.
 
 The app icon is `assets/icon-art.png` (made with an image model, in homage to DiTerlizzi's art for
 the card) cut to the macOS tile by `scripts/icon.swift`, which writes `icon.png` and `icon.icns`.
-Rerun it after changing the art. The menu-bar icon in `tray.rs` is separate: a template image, still
-the three-card placeholder.
+Rerun it after changing the art. The menu-bar icon is drawn in code in `tray.rs`: the same figure,
+simplified to a template image (one colour, which macOS tints to suit the menu bar).
