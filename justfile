@@ -8,7 +8,7 @@ toolchain := `sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml`
 default:
     @just --list
 
-# A development build never uploads to the live 17Lands API (see the README).
+# A development build never uploads to the live 17Lands API (see AGENTS.md).
 # Build and run, following Arena's live log.
 run:
     cargo +{{toolchain}} run
