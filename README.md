@@ -13,12 +13,16 @@ It brings [Recall](https://github.com/fredoliveira/recall)'s desktop app and
 
 ## Install
 
-Apple Silicon Macs only, macOS 11 or later. There is no release yet, so build it from source with
-Rust (via [rustup](https://rustup.rs)) and [just](https://github.com/casey/just):
+Apple Silicon Macs only, macOS 11 or later. With [Homebrew](https://brew.sh):
 
 ```sh
-just bundle && open dist/Brainstorm.app
+brew install --cask fredoliveira/tap/brainstorm
 ```
+
+Or download `Brainstorm.dmg` from the
+[latest release](https://github.com/fredoliveira/brainstorm/releases/latest). To build it from
+source instead, you'll need Rust (via [rustup](https://rustup.rs)) and
+[just](https://github.com/casey/just): `just bundle && open dist/Brainstorm.app`.
 
 ## Using it
 

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-21
+
 ### Added
 
 - The draft overlay: a panel beside Arena listing the pack you're picking from, ranked by 17Lands
@@ -21,4 +23,5 @@ All notable changes to this project are documented here. The format is based on
 - An app icon: a thinker with three lights around her head, in homage to Tony DiTerlizzi's art for
   the card Brainstorm. The menu-bar icon is the same figure in a peaked hood, in one colour.
 
-[Unreleased]: https://github.com/fredoliveira/brainstorm/commits/main
+[Unreleased]: https://github.com/fredoliveira/brainstorm/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/fredoliveira/brainstorm/releases/tag/v0.1.0
